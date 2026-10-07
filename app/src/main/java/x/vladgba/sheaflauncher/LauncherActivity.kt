@@ -2,7 +2,6 @@ package x.vladgba.sheaflauncher
 
 import android.app.Activity
 import android.app.ActivityOptions
-import android.appwidget.AppWidgetHost
 import android.appwidget.AppWidgetHostView
 import android.appwidget.AppWidgetManager
 import android.appwidget.AppWidgetProviderInfo
@@ -68,7 +67,7 @@ class LauncherActivity : Activity(), WorkspaceView.Callbacks {
     private lateinit var repo: AppRepository
     private lateinit var iconCache: IconCache
     private lateinit var widgetManager: AppWidgetManager
-    private lateinit var widgetHost: AppWidgetHost
+    private lateinit var widgetHost: SheafWidgetHost
     private lateinit var launcherApps: LauncherApps
 
     private lateinit var root: FrameLayout
@@ -117,7 +116,7 @@ class LauncherActivity : Activity(), WorkspaceView.Callbacks {
         // Show cached icons right away; live icons replace them after reloadApps().
         apps = iconCache.memory().ifEmpty { iconCache.loadDisk() }
         widgetManager = AppWidgetManager.getInstance(this)
-        widgetHost = AppWidgetHost(this, WIDGET_HOST_ID)
+        widgetHost = SheafWidgetHost(this, WIDGET_HOST_ID) { main.post { reloadBrokenWidgets() } }
         launcherApps = getSystemService(LauncherApps::class.java)
         shortcuts = Shortcuts(this)
 
@@ -157,6 +156,8 @@ class LauncherActivity : Activity(), WorkspaceView.Callbacks {
     override fun onStart() {
         super.onStart()
         try { widgetHost.startListening() } catch (_: Exception) { }
+        // Coming back: retry anything that failed while we weren't listening.
+        if (::workspace.isInitialized) reloadBrokenWidgets()
     }
 
     override fun onStop() {
@@ -481,16 +482,44 @@ class LauncherActivity : Activity(), WorkspaceView.Callbacks {
 
     private fun createWidgetView(item: WidgetItem): View {
         val info = widgetManager.getAppWidgetInfo(item.appWidgetId)
-            ?: return TextView(this).apply {
-                text = "Widget unavailable"
-                setTextColor(Color.WHITE)
-                gravity = Gravity.CENTER
-                setBackgroundColor(0x44000000)
-            }
-        val v = widgetHost.createView(this, item.appWidgetId, info)
+            ?: return unavailableView(item)
+        val v = try {
+            widgetHost.createView(this, item.appWidgetId, info)
+        } catch (e: Exception) {
+            return unavailableView(item)
+        }
         v.setPadding(0, 0, 0, 0)
+        (v as? SheafWidgetHostView)?.onRetry = { reloadWidget(item) }
+        // Give the provider its real size right away; many widgets only render after this.
+        updateWidgetSize(item, v)
         v.post { updateWidgetSize(item, v) }
         return v
+    }
+
+    private fun unavailableView(item: WidgetItem) = TextView(this).apply {
+        text = "Widget unavailable\nTap to retry · long-press to remove"
+        setTextColor(Color.WHITE)
+        gravity = Gravity.CENTER
+        setBackgroundColor(0x44000000)
+        setOnClickListener { reloadWidget(item) }
+    }
+
+    /** Throws away a widget's view and creates it again. */
+    private fun reloadWidget(item: WidgetItem) {
+        workspace.itemViews.remove(item.id)?.let { (it.parent as? android.view.ViewGroup)?.removeView(it) }
+        workspace.sync()
+    }
+
+    /** Retries widgets that failed to inflate or whose provider was missing (e.g. after an app update). */
+    private fun reloadBrokenWidgets() {
+        if (isDestroyed) return
+        var any = false
+        for (w in model.widgets()) {
+            val v = workspace.itemViews[w.id]
+            val broken = (v is SheafWidgetHostView && v.failed) || (v != null && v !is SheafWidgetHostView)
+            if (broken) { workspace.itemViews.remove(w.id)?.let { (it.parent as? android.view.ViewGroup)?.removeView(it) }; any = true }
+        }
+        if (any) workspace.sync()
     }
 
     /** Tells the widget its real size so it can pick a layout. */

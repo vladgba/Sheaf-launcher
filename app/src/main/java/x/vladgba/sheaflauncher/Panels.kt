@@ -1,7 +1,6 @@
 package x.vladgba.sheaflauncher
 
 import android.annotation.SuppressLint
-import android.appwidget.AppWidgetHostView
 import android.appwidget.AppWidgetManager
 import android.appwidget.AppWidgetProviderInfo
 import android.content.Context
@@ -94,42 +93,29 @@ object Panels {
     // ================================================================= widgets
 
     /** Default size (dp) for a newly placed widget. */
-    fun defaultWidgetSizeDp(a: LauncherActivity, info: AppWidgetProviderInfo): Pair<Float, Float> {
-        val d = a.resources.displayMetrics.density
-        val (pw, ph) = a.pageContentSizeDp()
-        var w = info.minWidth / d
-        var h = info.minHeight / d
-        if (Build.VERSION.SDK_INT >= 31) {
-            val cw = pw / a.config.columns
-            val ch = ph / a.config.rows
-            if (info.targetCellWidth > 0) w = maxOf(w, info.targetCellWidth * cw)
-            if (info.targetCellHeight > 0) h = maxOf(h, info.targetCellHeight * ch)
-        }
-        return Pair(w.coerceIn(110f, pw), h.coerceIn(LauncherActivity.MIN_WIDGET_DP, ph))
-    }
+    fun defaultWidgetSizeDp(a: LauncherActivity, info: AppWidgetProviderInfo): Pair<Float, Float> =
+        defaultWidgetSizeDp(info, a.resources.displayMetrics.density, a.pageContentSizeDp(), a.config.columns, a.config.rows)
 
+    /**
+     * Widget picker. Opens instantly; everything slow happens off the main thread
+     * or lazily:
+     *  1. provider list, labels and app names load on a background thread
+     *  2. rows are added a few per frame
+     *  3. previews load only for rows near the visible area (images on the
+     *     background thread, preview layouts one per frame on the main thread)
+     */
     @SuppressLint("SetTextI18n")
-    fun pickWidget(a: LauncherActivity): DragSourcePanel? {
-        val awm = AppWidgetManager.getInstance(a)
+    fun pickWidget(a: LauncherActivity): DragSourcePanel {
         val pm = a.packageManager
-        val providers = awm.installedProviders
-        if (providers.isEmpty()) { a.toast("No widgets installed"); return null }
-
-        data class Row(val info: AppWidgetProviderInfo, val label: String, val app: String)
-        val rows = providers.map { info ->
-            val app = try {
-                pm.getApplicationLabel(pm.getApplicationInfo(info.provider.packageName, 0)).toString()
-            } catch (_: Exception) { info.provider.packageName }
-            Row(info, info.loadLabel(pm), app)
-        }.sortedWith(compareBy({ it.app.lowercase() }, { it.label.lowercase() }))
-
-        val dm = a.resources.displayMetrics
-        val d = dm.density
+        val d = a.resources.displayMetrics.density
         val boxH = a.dpi(130f)
+        val main = android.os.Handler(android.os.Looper.getMainLooper())
+        val io = Executors.newSingleThreadExecutor()
+
         val list = LinearLayout(a).apply { orientation = LinearLayout.VERTICAL }
         val scroll = ScrollView(a).apply { addView(list); isVerticalScrollBarEnabled = false }
         val title = TextView(a).apply {
-            text = "Long-press a widget and drag it onto the home screen"
+            text = "Loading widgets…"
             setTextColor(Palette.cardTextDim); textSize = 13f
             setPadding(a.dpi(20f), a.dpi(16f), a.dpi(20f), a.dpi(8f))
         }
@@ -140,41 +126,13 @@ object Panels {
             addView(title)
             addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
         }
-        // Keep clear of the status/navigation bars.
         val ins = a.systemInsets
         card.layoutParams = FrameLayout.LayoutParams(-1, -1).apply {
             setMargins(ins.left + a.dpi(8f), ins.top + a.dpi(8f), ins.right + a.dpi(8f), ins.bottom + a.dpi(8f))
         }
         val panel = DragSourcePanel(a, card)
-        val io = Executors.newSingleThreadExecutor()
-        var lastApp: String? = null
-        for (r in rows) {
-            if (r.app != lastApp) {
-                lastApp = r.app
-                list.addView(TextView(a).apply {
-                    text = r.app; textSize = 15f; setTextColor(Palette.cardText)
-                    setPadding(a.dpi(20f), a.dpi(14f), a.dpi(20f), a.dpi(4f))
-                })
-            }
-            val (wDp, hDp) = defaultWidgetSizeDp(a, r.info)
-            val box = PreviewBox(a, (wDp * d).roundToInt(), (hDp * d).roundToInt())
-            box.tag = r.info
-            box.setOnClickListener { a.toast("Long-press and drag to place") }
-            val item = LinearLayout(a).apply {
-                orientation = LinearLayout.VERTICAL
-                setPadding(a.dpi(20f), a.dpi(6f), a.dpi(20f), a.dpi(10f))
-                addView(box, LinearLayout.LayoutParams(-1, boxH))
-                addView(TextView(a).apply {
-                    text = "${r.label}  ·  ${wDp.roundToInt()}×${hDp.roundToInt()} dp"
-                    setTextColor(Palette.cardTextDim); textSize = 12f
-                    setPadding(0, a.dpi(4f), 0, 0)
-                })
-            }
-            list.addView(item)
-            panel.draggables += box
-            loadPreview(a, r.info, box, io)
-        }
-        panel.onClosed = { io.shutdownNow() }
+        var closed = false
+        panel.onClosed = { closed = true; io.shutdownNow(); main.removeCallbacksAndMessages(null) }
         panel.onItemMenu = { a.toast("Drag it onto the home screen") }
         panel.onDragStart = { v, rx, ry ->
             val box = v as PreviewBox
@@ -183,38 +141,149 @@ object Panels {
         panel.onDragMove = { rx, ry -> a.externalDragMove(rx, ry) }
         panel.onDragEnd = { c -> a.externalDragEnd(c) }
         a.showPanel(panel)
+
+        // ---- lazy previews
+        val boxes = ArrayList<PreviewBox>()
+        val requested = HashSet<PreviewBox>()
+        val layoutQueue = ArrayDeque<PreviewBox>()
+        val tmp = android.graphics.Rect()
+
+        var inflating = false
+        fun inflateNextLayout() {
+            if (closed) return
+            val box = layoutQueue.removeFirstOrNull()
+            if (box == null) { inflating = false; return }
+            val info = box.tag as AppWidgetProviderInfo
+            val v = inflatePreviewLayout(a, info)
+            if (v != null) box.setContent(v) else loadImage(a, info, box, io, main)
+            if (layoutQueue.isNotEmpty()) main.post { inflateNextLayout() } else inflating = false
+        }
+
+        fun loadVisible() {
+            if (closed || scroll.height == 0) return
+            val top = scroll.scrollY - scroll.height        // one screen above
+            val bottom = scroll.scrollY + scroll.height * 2 // one screen below
+            var queued = false
+            for (box in boxes) {
+                if (box in requested) continue
+                // box position inside the list (box → row → list)
+                val row = box.parent as View
+                val y = row.top + box.top
+                if (y + box.height < top || y > bottom) continue
+                requested += box
+                val info = box.tag as AppWidgetProviderInfo
+                if (Build.VERSION.SDK_INT >= 31 && info.previewLayout != 0) {
+                    layoutQueue.addLast(box); queued = true
+                } else {
+                    loadImage(a, info, box, io, main)
+                }
+            }
+            // One preview layout per frame, single chain.
+            if (queued && !inflating) { inflating = true; main.post { inflateNextLayout() } }
+        }
+        scroll.viewTreeObserver.addOnScrollChangedListener { loadVisible() }
+        scroll.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> loadVisible() }
+
+        // ---- 1. query in the background
+        data class Row(val info: AppWidgetProviderInfo, val label: String, val app: String, val w: Float, val h: Float)
+        val pageSize = a.pageContentSizeDp()
+        val cols = a.config.columns
+        val rowsCfg = a.config.rows
+        try {
+            io.execute {
+                val providers = try { AppWidgetManager.getInstance(a).installedProviders } catch (_: Exception) { emptyList() }
+                val appNames = HashMap<String, String>()
+                val rows = providers.map { info ->
+                    val pkg = info.provider.packageName
+                    val app = appNames.getOrPut(pkg) {
+                        try { pm.getApplicationLabel(pm.getApplicationInfo(pkg, 0)).toString() } catch (_: Exception) { pkg }
+                    }
+                    val (w, h) = defaultWidgetSizeDp(info, d, pageSize, cols, rowsCfg)
+                    Row(info, try { info.loadLabel(pm) } catch (_: Exception) { pkg }, app, w, h)
+                }.sortedWith(compareBy({ it.app.lowercase() }, { it.label.lowercase() }))
+
+                // ---- 2. build rows a few per frame
+                main.post {
+                    if (closed) return@post
+                    if (rows.isEmpty()) { title.text = "No widgets installed"; return@post }
+                    title.text = "Long-press a widget and drag it onto the home screen"
+                    var i = 0
+                    var lastApp: String? = null
+                    fun addChunk() {
+                        if (closed) return
+                        val end = min(i + ROWS_PER_FRAME, rows.size)
+                        while (i < end) {
+                            val r = rows[i++]
+                            if (r.app != lastApp) {
+                                lastApp = r.app
+                                list.addView(TextView(a).apply {
+                                    text = r.app; textSize = 15f; setTextColor(Palette.cardText)
+                                    setPadding(a.dpi(20f), a.dpi(14f), a.dpi(20f), a.dpi(4f))
+                                })
+                            }
+                            val box = PreviewBox(a, (r.w * d).roundToInt(), (r.h * d).roundToInt())
+                            box.tag = r.info
+                            box.setOnClickListener { a.toast("Long-press and drag to place") }
+                            val item = LinearLayout(a).apply {
+                                orientation = LinearLayout.VERTICAL
+                                setPadding(a.dpi(20f), a.dpi(6f), a.dpi(20f), a.dpi(10f))
+                                addView(box, LinearLayout.LayoutParams(-1, boxH))
+                                addView(TextView(a).apply {
+                                    text = "${r.label}  ·  ${r.w.roundToInt()}×${r.h.roundToInt()} dp"
+                                    setTextColor(Palette.cardTextDim); textSize = 12f
+                                    setPadding(0, a.dpi(4f), 0, 0)
+                                })
+                            }
+                            list.addView(item)
+                            boxes += box
+                            panel.draggables += box
+                        }
+                        if (i < rows.size) main.post { addChunk() }
+                        // previews for whatever is on screen once laid out
+                        list.post { loadVisible() }
+                    }
+                    addChunk()
+                }
+            }
+        } catch (_: java.util.concurrent.RejectedExecutionException) { }
         return panel
     }
 
-    /**
-     * Preview priority: previewLayout (Android 12+, real RemoteViews), previewImage, app icon.
-     * Images load off the main thread; RemoteViews must inflate on it.
-     */
-    private fun loadPreview(a: LauncherActivity, info: AppWidgetProviderInfo, box: PreviewBox,
-                            io: java.util.concurrent.ExecutorService) {
-        if (Build.VERSION.SDK_INT >= 31 && info.previewLayout != 0) {
-            box.post {
-                val v = try {
-                    AppWidgetHostView(a).apply {
-                        setAppWidget(-1, info)
-                        updateAppWidget(RemoteViews(info.provider.packageName, info.previewLayout))
-                    }
-                } catch (_: Throwable) { null }
-                if (v != null) box.setContent(v) else loadImage(a, info, box, io)
-            }
-            return
+    /** Default size (dp) computed from plain values so it can run off the main thread. */
+    private fun defaultWidgetSizeDp(info: AppWidgetProviderInfo, density: Float, page: Pair<Float, Float>,
+                                    columns: Int, rows: Int): Pair<Float, Float> {
+        val (pw, ph) = page
+        var w = info.minWidth / density
+        var h = info.minHeight / density
+        if (Build.VERSION.SDK_INT >= 31) {
+            if (info.targetCellWidth > 0) w = maxOf(w, info.targetCellWidth * pw / columns)
+            if (info.targetCellHeight > 0) h = maxOf(h, info.targetCellHeight * ph / rows)
         }
-        loadImage(a, info, box, io)
+        return Pair(w.coerceIn(110f, pw), h.coerceIn(LauncherActivity.MIN_WIDGET_DP, ph))
+    }
+
+    /**
+     * Android 12+ preview layout. Inflated with RemoteViews.apply(), which throws on
+     * failure (unlike AppWidgetHostView, which silently shows "Can't load widget"),
+     * so we can fall back to the preview image / icon.
+     */
+    private fun inflatePreviewLayout(a: LauncherActivity, info: AppWidgetProviderInfo): View? {
+        if (Build.VERSION.SDK_INT < 31 || info.previewLayout == 0) return null
+        return try {
+            val rv = RemoteViews(info.provider.packageName, info.previewLayout)
+            val parent = FrameLayout(a)
+            rv.apply(a, parent)
+        } catch (_: Throwable) { null }
     }
 
     private fun loadImage(a: LauncherActivity, info: AppWidgetProviderInfo, box: PreviewBox,
-                          io: java.util.concurrent.ExecutorService) {
+                          io: java.util.concurrent.ExecutorService, main: android.os.Handler) {
         try {
             io.execute {
                 val dpi = a.resources.displayMetrics.densityDpi
                 val dr: Drawable? = try { info.loadPreviewImage(a, dpi) } catch (_: Throwable) { null }
                     ?: try { info.loadIcon(a, dpi) } catch (_: Throwable) { null }
-                box.post {
+                main.post {
                     box.setContent(ImageView(a).apply {
                         setImageDrawable(dr)
                         scaleType = ImageView.ScaleType.FIT_CENTER
@@ -223,6 +292,8 @@ object Panels {
             }
         } catch (_: java.util.concurrent.RejectedExecutionException) { /* panel closed */ }
     }
+
+    private const val ROWS_PER_FRAME = 6
 
     /**
      * Shows one child laid out at the widget's real size ([natW]×[natH] px),
