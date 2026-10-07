@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Sheaf</string>
+    <string name="accessibility_label">Sheaf Home actions</string>
+    <string name="accessibility_description">Lets Sheaf lock the screen and open the notification shade or quick settings when you press Home on the default page. It does not read screen content.</string>
+    <string name="device_admin_label">Sheaf screen lock</string>
+    <string name="device_admin_description">Lets Sheaf lock the screen when you press Home on the default page.</string>
+</resources>
