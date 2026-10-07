@@ -6,7 +6,6 @@ app/build/
 captures/
 .externalNativeBuild/
 .cxx/
-.idea/
 *.iml
 
 # Machine-specific (SDK path)
@@ -22,3 +21,4 @@ local.properties
 *.keystore
 *.jks
 app/release/*
+keystore.properties
