@@ -1,4 +1,4 @@
-# Gradle / build output
+# Gradle & Build Output
 .gradle/
 build/
 app/build/
@@ -8,17 +8,30 @@ captures/
 .cxx/
 *.iml
 
-# Machine-specific (SDK path)
+# Local & Machine-Specific Configuration
 local.properties
+keystore.properties
 
-# Android Studio
+# Android Studio & IDE
 .idea/
+misc.xml
+deploymentTargetDropDown.xml
+render.experimental.xml
 .DS_Store
 
-# Built artifacts
+# Log Files
+*.log
+
+# Keystore & Secrets
+*.jks
+*.keystore
+google-services.json
+
+# Built Artifacts
 *.apk
 *.aab
-*.keystore
-*.jks
+output.json
 app/release/*
-keystore.properties
+
+# Android Profiling
+*.hprof
