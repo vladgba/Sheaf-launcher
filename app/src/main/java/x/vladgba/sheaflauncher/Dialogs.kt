@@ -143,6 +143,14 @@ object Dialogs {
             }
         })
         col.addView(links)
+        val backup = LinearLayout(ctx)
+        backup.addView(Button(ctx, null, android.R.attr.borderlessButtonStyle).apply {
+            text = "Export settings…"; setOnClickListener { a.exportSettings() }
+        })
+        backup.addView(Button(ctx, null, android.R.attr.borderlessButtonStyle).apply {
+            text = "Import settings…"; setOnClickListener { a.importSettings() }
+        })
+        col.addView(backup)
 
         b.setTitle("Home screen")
             .setView(ScrollView(ctx).apply { addView(col) })

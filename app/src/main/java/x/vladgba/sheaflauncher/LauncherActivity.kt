@@ -754,6 +754,8 @@ class LauncherActivity : Activity(), WorkspaceView.Callbacks {
                 val uri = data?.data
                 if (resultCode == RESULT_OK && uri != null) onIconImagePicked(uri) else pendingIconComponent = null
             }
+            REQ_EXPORT -> data?.data?.takeIf { resultCode == RESULT_OK }?.let { writeBackup(it) }
+            REQ_IMPORT -> data?.data?.takeIf { resultCode == RESULT_OK }?.let { confirmImport(it) }
         }
     }
 
@@ -1067,6 +1069,100 @@ class LauncherActivity : Activity(), WorkspaceView.Callbacks {
         store.save(model)
     }
 
+    // ---------------------------------------------------------------- backup: export / import
+
+    /** Asks where to save a backup of layout, settings, hidden apps, labels, gestures and custom icons. */
+    fun exportSettings() {
+        save()
+        val name = "sheaf-backup-" + java.text.SimpleDateFormat("yyyyMMdd-HHmm", java.util.Locale.US)
+            .format(java.util.Date()) + ".json"
+        val i = Intent(Intent.ACTION_CREATE_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE)
+            .setType("application/json").putExtra(Intent.EXTRA_TITLE, name)
+        try {
+            @Suppress("DEPRECATION")
+            startActivityForResult(i, REQ_EXPORT)
+        } catch (e: ActivityNotFoundException) { toast("No file picker available") }
+    }
+
+    fun importSettings() {
+        val i = Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE)
+            .setType("*/*").putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("application/json", "text/plain", "application/octet-stream"))
+        try {
+            @Suppress("DEPRECATION")
+            startActivityForResult(i, REQ_IMPORT)
+        } catch (e: ActivityNotFoundException) { toast("No file picker available") }
+    }
+
+    private fun writeBackup(uri: Uri) {
+        val json = model.toJson()
+        io.execute {
+            val ok = try {
+                val icons = org.json.JSONObject()
+                customIconDir.listFiles()?.forEach { f ->
+                    icons.put(f.name, android.util.Base64.encodeToString(f.readBytes(), android.util.Base64.NO_WRAP))
+                }
+                val root = org.json.JSONObject()
+                    .put("format", BACKUP_FORMAT).put("formatVersion", 1)
+                    .put("workspace", json).put("iconFiles", icons)
+                contentResolver.openOutputStream(uri, "wt")!!.use { it.write(root.toString().toByteArray(Charsets.UTF_8)) }
+                true
+            } catch (e: Exception) { false }
+            main.post { toast(if (ok) "Settings exported" else "Export failed") }
+        }
+    }
+
+    private fun confirmImport(uri: Uri) {
+        android.app.AlertDialog.Builder(this)
+            .setTitle("Import settings?")
+            .setMessage("This replaces the current layout, settings, hidden apps and custom icons. " +
+                    "Widgets from another device can't be restored and will be removed.")
+            .setNegativeButton(android.R.string.cancel, null)
+            .setPositiveButton("Import") { _, _ -> readBackup(uri) }
+            .show()
+    }
+
+    private fun readBackup(uri: Uri) {
+        io.execute {
+            val result = try {
+                val text = contentResolver.openInputStream(uri)!!.use { String(it.readBytes(), Charsets.UTF_8) }
+                val root = org.json.JSONObject(text)
+                require(root.optString("format") == BACKUP_FORMAT) { "Not a Sheaf backup" }
+                val ws = root.getJSONObject("workspace")
+                val imported = WorkspaceModel.fromJson(ws) // validate before touching anything
+                Pair(imported, root.optJSONObject("iconFiles"))
+            } catch (e: Exception) { null }
+            main.post {
+                if (isDestroyed) return@post
+                if (result == null) { toast("Not a valid Sheaf backup"); return@post }
+                applyBackup(result.first, result.second)
+            }
+        }
+    }
+
+    private fun applyBackup(imported: WorkspaceModel, iconFiles: org.json.JSONObject?) {
+        // Widget ids belong to this install; keep only ones our host still owns.
+        val ownIds = widgetHost.appWidgetIds.toHashSet()
+        imported.items.removeAll { it is WidgetItem && it.appWidgetId !in ownIds }
+
+        customIconDir.listFiles()?.forEach { it.delete() }
+        customIconCache.clear()
+        iconFiles?.let { icons ->
+            for (name in icons.keys()) {
+                if (name.contains('/') || name.contains("..")) continue // stay inside the folder
+                try {
+                    File(customIconDir, name).writeBytes(android.util.Base64.decode(icons.getString(name), android.util.Base64.DEFAULT))
+                } catch (_: Exception) { }
+            }
+        }
+        // Drop icon specs whose file didn't come along.
+        imported.customIcons.entries.removeAll { (_, spec) ->
+            spec.startsWith("file:") && !File(customIconDir, spec.removePrefix("file:")).exists()
+        }
+        store.save(imported)
+        toast("Settings imported")
+        recreate() // reload everything from the saved file
+    }
+
     // ---------------------------------------------------------------- folder icon & name
 
     fun folderIconKey(folder: FolderItem) = "folder:${folder.id}"
@@ -1129,6 +1225,9 @@ class LauncherActivity : Activity(), WorkspaceView.Callbacks {
         private const val M_HIDE = 14
         private const val M_EDIT = 15
         private const val REQ_ICON_IMAGE = 14
+        private const val REQ_EXPORT = 15
+        private const val REQ_IMPORT = 16
+        private const val BACKUP_FORMAT = "sheaf-backup"
         private const val STATE_ICON_COMPONENT = "pending_icon_component"
         private const val ICON_PX = 256
         private const val CROP_MAX_PX = 2048
