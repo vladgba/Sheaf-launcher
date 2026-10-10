@@ -1,5 +1,6 @@
 package x.vladgba.sheaflauncher.model
 
+import kotlin.math.abs
 import org.json.JSONArray
 import org.json.JSONObject
 import kotlin.math.max
@@ -209,16 +210,16 @@ class WorkspaceModel {
         }
         val pending = items.filterIsInstance<GridItem>().filter { it.needsPlacement }
         if (pending.isNotEmpty()) {
-            placeItems(pending, pageWdp, pageHdp)
+            // New/orphaned apps go to the default (home) page first, then wrap onward.
+            placeItems(pending, pageWdp, pageHdp, c.homeX, c.homeY)
             changed = true
         }
         return changed
     }
 
     /**
-     * Puts each item into the first free cell, scanning pages row by row
-     * (left→right, then the next row of pages), starting at page
-     * ([startX], [startY]) and wrapping around. A cell is busy if an
+     * Puts each item into the first free cell of page ([startX], [startY]);
+     * when that page is full, of the nearest page to it that has room. A cell is busy if an
      * app/folder sits in it or a widget covers its centre. When everything is
      * full a new column of pages is added, so no app is ever left off the home screen.
      */
@@ -254,10 +255,14 @@ class WorkspaceModel {
         for (item in toPlace) {
             var placed = false
             while (!placed) {
-                val total = c.pagesX * c.pagesY
-                val start = startY.coerceIn(0, c.pagesY - 1) * c.pagesX + startX.coerceIn(0, c.pagesX - 1)
-                search@ for (n in 0 until total) {
-                    val l = (start + n) % total
+                // Start page first, then the nearest pages around it (ties: row by row),
+                // so a full start page never sends apps back to page (1,1).
+                val sx = startX.coerceIn(0, c.pagesX - 1)
+                val sy = startY.coerceIn(0, c.pagesY - 1)
+                val order = (0 until c.pagesX * c.pagesY).sortedWith(
+                    compareBy({ abs(it % c.pagesX - sx) + abs(it / c.pagesX - sy) }, { it })
+                )
+                search@ for (l in order) {
                     val px = l % c.pagesX
                     val py = l / c.pagesX
                     val g = grid(px, py)
