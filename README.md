@@ -1,4 +1,3 @@
-@ -0,0 +1,72 @@
 # Sheaf Launcher
 
 A minimal Android home-screen launcher with free-form widgets, a 2D page matrix and per-item z-order.
