@@ -3,6 +3,9 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
+// Shared versioning (version.properties) + release signing, see gradle/android-common.gradle
+apply(from = rootProject.file("gradle/android-common.gradle"))
+
 android {
     namespace = "x.vladgba.sheaflauncher"
     compileSdk = 35
@@ -11,8 +14,6 @@ android {
         applicationId = "x.vladgba.sheaflauncher"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0"
     }
 
     buildTypes {
