@@ -555,6 +555,7 @@ class WorkspaceView(context: Context, private val dragLayer: FrameLayout) : View
                         val maxY = (page.contentH - v.height).coerceAtLeast(0)
                         item.x = lx.coerceIn(0f, maxX.toFloat()) / d
                         item.y = ly.coerceIn(0f, maxY.toFloat()) / d
+                        if (item.snap) item.snapToGrid(page.contentW / d, page.contentH / d, c.columns, c.rows)
                     }
                 }
                 item.pageX = curX; item.pageY = curY

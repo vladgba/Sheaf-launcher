@@ -20,6 +20,9 @@ import kotlin.math.roundToInt
  *  - drag inside the frame  → move
  *  - tap outside the frame  → done
  * Coordinates are relative to the page content area.
+ *
+ * With [cellW]/[cellH] set (widget fixed to the grid) the frame follows the
+ * finger freely but snaps to whole cells, and only snapped rects are reported.
  */
 @SuppressLint("ViewConstructor")
 class ResizeFrame(
@@ -27,9 +30,16 @@ class ResizeFrame(
     initial: Rect,
     private val onChange: (Rect) -> Unit,
     private val onDone: () -> Unit,
+    private val cellW: Float = 0f,
+    private val cellH: Float = 0f,
 ) : View(context) {
 
+    private val snapping get() = cellW > 0f && cellH > 0f
+    /** What the finger is dragging (unsnapped). */
+    private val raw = RectF(initial)
+    /** What is shown and reported: [raw], snapped to cells when [snapping]. */
     private val rect = RectF(initial)
+    private val gridPaint = Paint().apply { color = 0x33FFFFFF; strokeWidth = context.dp(1f) }
     private val touchR = context.dp(26f)
     private val handleR = context.dp(7f)
     private val minSize = context.dp(32f)
@@ -59,12 +69,20 @@ class ResizeFrame(
         dimPath.addRect(0f, 0f, width.toFloat(), height.toFloat(), Path.Direction.CW)
         dimPath.addRect(rect, Path.Direction.CW)
         canvas.drawPath(dimPath, dim)
+        if (snapping) {
+            var x = cellW
+            while (x < width - 1) { canvas.drawLine(x, 0f, x, height.toFloat(), gridPaint); x += cellW }
+            var y = cellH
+            while (y < height - 1) { canvas.drawLine(0f, y, width.toFloat(), y, gridPaint); y += cellH }
+        }
         canvas.drawRect(rect, border)
         val xs = floatArrayOf(rect.left, rect.centerX(), rect.right)
         val ys = floatArrayOf(rect.top, rect.centerY(), rect.bottom)
         for (x in xs) for (y in ys) if (x != rect.centerX() || y != rect.centerY()) canvas.drawCircle(x, y, handleR, handle)
         val d = resources.displayMetrics.density
-        val text = "${(rect.width() / d).roundToInt()} × ${(rect.height() / d).roundToInt()} dp"
+        val text = if (snapping)
+            "${(rect.width() / cellW).roundToInt()} × ${(rect.height() / cellH).roundToInt()} cells"
+        else "${(rect.width() / d).roundToInt()} × ${(rect.height() / d).roundToInt()} dp"
         val ty = if (rect.top > label.textSize * 2) rect.top - label.textSize * 0.8f else rect.bottom + label.textSize * 1.6f
         canvas.drawText(text, rect.centerX(), ty, label)
     }
@@ -74,6 +92,7 @@ class ResizeFrame(
         when (e.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 lastX = e.x; lastY = e.y
+                raw.set(rect)
                 mode = hit(e.x, e.y)
                 if (mode == 0) post(onDone)
             }
@@ -83,9 +102,13 @@ class ResizeFrame(
                 val dy = e.y - lastY
                 lastX = e.x; lastY = e.y
                 apply(dx, dy)
+                val before = RectF(rect)
+                if (snapping) snapRect() else rect.set(raw)
                 invalidate()
-                rect.round(out)
-                onChange(out)
+                if (rect != before || !snapping) {
+                    rect.round(out)
+                    onChange(out)
+                }
             }
 
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> mode = 0
@@ -97,15 +120,38 @@ class ResizeFrame(
         val w = width.toFloat()
         val h = height.toFloat()
         if (mode == MOVE) {
-            val ox = dx.coerceIn(-rect.left, w - rect.right)
-            val oy = dy.coerceIn(-rect.top, h - rect.bottom)
-            rect.offset(ox, oy)
+            val ox = dx.coerceIn(-raw.left, w - raw.right)
+            val oy = dy.coerceIn(-raw.top, h - raw.bottom)
+            raw.offset(ox, oy)
             return
         }
-        if (mode and L != 0) rect.left = (rect.left + dx).coerceIn(0f, rect.right - minSize)
-        if (mode and R != 0) rect.right = (rect.right + dx).coerceIn(rect.left + minSize, w)
-        if (mode and T != 0) rect.top = (rect.top + dy).coerceIn(0f, rect.bottom - minSize)
-        if (mode and B != 0) rect.bottom = (rect.bottom + dy).coerceIn(rect.top + minSize, h)
+        if (mode and L != 0) raw.left = (raw.left + dx).coerceIn(0f, raw.right - minSize)
+        if (mode and R != 0) raw.right = (raw.right + dx).coerceIn(raw.left + minSize, w)
+        if (mode and T != 0) raw.top = (raw.top + dy).coerceIn(0f, raw.bottom - minSize)
+        if (mode and B != 0) raw.bottom = (raw.bottom + dy).coerceIn(raw.top + minSize, h)
+    }
+
+    /** [rect] = [raw] rounded to whole cells (at least one), kept inside the page. */
+    private fun snapRect() {
+        val cols = (width / cellW).roundToInt().coerceAtLeast(1)
+        val rows = (height / cellH).roundToInt().coerceAtLeast(1)
+        if (mode == MOVE) {
+            // Moving keeps the size; only the position snaps.
+            val cw = (rect.width() / cellW).roundToInt().coerceIn(1, cols)
+            val ch = (rect.height() / cellH).roundToInt().coerceIn(1, rows)
+            val cx = (raw.left / cellW).roundToInt().coerceIn(0, cols - cw)
+            val cy = (raw.top / cellH).roundToInt().coerceIn(0, rows - ch)
+            rect.set(cx * cellW, cy * cellH, (cx + cw) * cellW, (cy + ch) * cellH)
+            return
+        }
+        var l = (raw.left / cellW).roundToInt().coerceIn(0, cols - 1)
+        var r = (raw.right / cellW).roundToInt().coerceIn(1, cols)
+        var t = (raw.top / cellH).roundToInt().coerceIn(0, rows - 1)
+        var b = (raw.bottom / cellH).roundToInt().coerceIn(1, rows)
+        // Never collapse below one cell: grow away from the edge being dragged.
+        if (r <= l) { if (mode and L != 0) l = r - 1 else r = l + 1 }
+        if (b <= t) { if (mode and T != 0) t = b - 1 else b = t + 1 }
+        rect.set(l * cellW, t * cellH, r * cellW, b * cellH)
     }
 
     private fun hit(x: Float, y: Float): Int {

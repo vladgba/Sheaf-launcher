@@ -90,6 +90,11 @@ object Dialogs {
         val frows = picker("Folder rows (then scroll)", LauncherConfig.MIN_FOLDER_GRID, LauncherConfig.MAX_FOLDER_GRID, cfg.folderRows)
         val labels = CheckBox(ctx).apply { text = "Show app labels"; isChecked = cfg.showLabels }
         col.addView(labels)
+        val snapWidgets = CheckBox(ctx).apply {
+            text = "Fix new widgets to grid"; isChecked = cfg.snapNewWidgets
+        }
+        col.addView(snapWidgets)
+
 
         // Color mode
         col.addView(TextView(ctx).apply {
@@ -159,6 +164,7 @@ object Dialogs {
                 cfg.columns = cols.value; cfg.rows = rows.value
                 cfg.pagesX = px.value; cfg.pagesY = py.value
                 cfg.iconScale = scale.value; cfg.showLabels = labels.isChecked
+                cfg.snapNewWidgets = snapWidgets.isChecked
                 cfg.folderColumns = fcols.value; cfg.folderRows = frows.value
                 val picked = (0 until group.childCount).map { group.getChildAt(it) as RadioButton }
                     .firstOrNull { it.isChecked }?.tag as? HomeAction

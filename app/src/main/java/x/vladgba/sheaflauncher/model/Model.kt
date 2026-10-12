@@ -54,6 +54,28 @@ class WidgetItem(id: Long, val appWidgetId: Int, val provider: String) : HomeIte
     var y = 0f
     var w = 0f
     var h = 0f
+
+    /** Fixed to the icon grid: position and size are whole cells. */
+    var snap = false
+
+    /**
+     * Rounds position and size to whole cells of a [pageWdp] × [pageHdp] page
+     * with [cols] × [rows] cells (at least one cell each way, kept on the page).
+     * @return true if anything moved
+     */
+    fun snapToGrid(pageWdp: Float, pageHdp: Float, cols: Int, rows: Int): Boolean {
+        if (pageWdp <= 0f || pageHdp <= 0f) return false
+        val cw = pageWdp / cols
+        val ch = pageHdp / rows
+        val sw = Math.round(w / cw).coerceIn(1, cols)
+        val sh = Math.round(h / ch).coerceIn(1, rows)
+        val sx = Math.round(x / cw).coerceIn(0, cols - sw)
+        val sy = Math.round(y / ch).coerceIn(0, rows - sh)
+        val nx = sx * cw; val ny = sy * ch; val nw = sw * cw; val nh = sh * ch
+        val changed = abs(nx - x) > 0.01f || abs(ny - y) > 0.01f || abs(nw - w) > 0.01f || abs(nh - h) > 0.01f
+        x = nx; y = ny; w = nw; h = nh
+        return changed
+    }
 }
 
 class LauncherConfig {
@@ -70,6 +92,7 @@ class LauncherConfig {
     var layoutLocked = false // no moving, resizing, adding or removing items
     var homeAction = "none" // Home pressed on the default page: none | lock | notifications | quick_settings
     var homeY = 0
+    var snapNewWidgets = false // widgets added from the picker start fixed to the grid
 
     fun toJson(): JSONObject = JSONObject()
         .put("columns", columns).put("rows", rows)
@@ -78,6 +101,7 @@ class LauncherConfig {
         .put("homeX", homeX).put("homeY", homeY)
         .put("folderColumns", folderColumns).put("folderRows", folderRows)
         .put("homeAction", homeAction).put("layoutLocked", layoutLocked).put("colorMode", colorMode)
+        .put("snapNewWidgets", snapNewWidgets)
 
     fun readJson(o: JSONObject) {
         columns = o.optInt("columns", columns).coerceIn(MIN_GRID, MAX_GRID)
@@ -91,6 +115,7 @@ class LauncherConfig {
         homeAction = o.optString("homeAction", homeAction)
         layoutLocked = o.optBoolean("layoutLocked", layoutLocked)
         colorMode = o.optString("colorMode", colorMode)
+        snapNewWidgets = o.optBoolean("snapNewWidgets", snapNewWidgets)
         homeX = o.optInt("homeX", homeX).coerceIn(0, pagesX - 1)
         homeY = o.optInt("homeY", homeY).coerceIn(0, pagesY - 1)
     }
@@ -158,6 +183,13 @@ class WorkspaceModel {
         .filterIsInstance<FolderItem>()
         .filter { it.pageX == px && it.pageY == py && it.covers(cx, cy) }
         .maxByOrNull { it.z }
+
+    /** Re-fits grid-fixed widgets after the grid or page size changed. */
+    fun snapWidgets(pageWdp: Float, pageHdp: Float): Boolean {
+        var changed = false
+        for (w in widgets()) if (w.snap && w.snapToGrid(pageWdp, pageHdp, config.columns, config.rows)) changed = true
+        return changed
+    }
 
     /**
      * Makes the model match the installed apps: removes uninstalled apps
@@ -322,6 +354,7 @@ class WorkspaceModel {
                     .put("provider", item.provider)
                     .put("x", item.x.toDouble()).put("y", item.y.toDouble())
                     .put("w", item.w.toDouble()).put("h", item.h.toDouble())
+                    .put("snap", item.snap)
             }
             arr.put(o)
         }
@@ -370,6 +403,7 @@ class WorkspaceModel {
                     "widget" -> WidgetItem(id, o.getInt("widgetId"), o.optString("provider")).apply {
                         x = o.optDouble("x", 0.0).toFloat(); y = o.optDouble("y", 0.0).toFloat()
                         w = o.optDouble("w", 100.0).toFloat(); h = o.optDouble("h", 100.0).toFloat()
+                        snap = o.optBoolean("snap", false)
                     }
 
                     else -> continue

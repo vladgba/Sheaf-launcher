@@ -606,6 +606,7 @@ class LauncherActivity : Activity(), WorkspaceView.Callbacks {
                 if (unlocked) {
                     m.add(0, M_RESIZE, 0, "Resize / move")
                     m.add(0, M_SIZE, 1, "Set exact size…")
+                    m.add(0, M_SNAP, 1, "Fix to grid").apply { isCheckable = true; isChecked = item.snap }
                     m.add(0, M_FRONT, 2, "Bring to front"); m.add(0, M_BACK, 3, "Send to back")
                 }
                 val info = widgetManager.getAppWidgetInfo(item.appWidgetId)
@@ -652,8 +653,19 @@ class LauncherActivity : Activity(), WorkspaceView.Callbacks {
                     val (pw, ph) = workspace.contentSizeDp()
                     w.w = nw.coerceIn(MIN_WIDGET_DP, pw); w.h = nh.coerceIn(MIN_WIDGET_DP, ph)
                     w.x = w.x.coerceAtMost(pw - w.w); w.y = w.y.coerceAtMost(ph - w.h)
+                    if (w.snap) w.snapToGrid(pw, ph, config.columns, config.rows)
                     saveAndSync(); updateWidgetSize(w)
                 }
+            }
+            M_SNAP -> {
+                val w = item as WidgetItem
+                w.snap = !w.snap
+                if (w.snap) {
+                    val (pw, ph) = workspace.contentSizeDp()
+                    w.snapToGrid(pw, ph, config.columns, config.rows)
+                }
+                saveAndSync(); updateWidgetSize(w)
+                toast(if (w.snap) "Widget fixed to grid" else "Widget moves freely")
             }
             M_RECONFIGURE -> try {
                 widgetHost.startAppWidgetConfigureActivityForResult(this, (item as WidgetItem).appWidgetId, 0, REQ_RECONFIGURE, null)
@@ -749,6 +761,7 @@ class LauncherActivity : Activity(), WorkspaceView.Callbacks {
         val d = resources.displayMetrics.density
         val (pw, ph) = workspace.contentSizeDp()
         val item = WidgetItem(model.newId(), id, info.provider.flattenToString())
+        item.snap = config.snapNewWidgets
         item.w = (info.minWidth / d).coerceAtLeast(110f).coerceAtMost(pw)
         item.h = (info.minHeight / d).coerceAtLeast(MIN_WIDGET_DP).coerceAtMost(ph)
         val place = pendingPlacement
@@ -762,6 +775,7 @@ class LauncherActivity : Activity(), WorkspaceView.Callbacks {
             item.x = (pw - item.w) / 2; item.y = (ph - item.h) / 2
             item.pageX = workspace.curX; item.pageY = workspace.curY
         }
+        if (item.snap) item.snapToGrid(pw, ph, config.columns, config.rows)
         model.bringToFront(item)
         model.items += item
         saveAndSync()
@@ -816,7 +830,9 @@ class LauncherActivity : Activity(), WorkspaceView.Callbacks {
                 item.w = r.width() / d; item.h = r.height() / d
                 page.requestLayout()
             },
-            onDone = { finishResize() })
+            onDone = { finishResize() },
+            cellW = if (item.snap) page.cellW else 0f,
+            cellH = if (item.snap) page.cellH else 0f)
         resizeFrame = frame
         resizeItem = item
         workspace.locked = true
@@ -828,7 +844,15 @@ class LauncherActivity : Activity(), WorkspaceView.Callbacks {
         (frame.parent as? PageView)?.removeView(frame)
         resizeFrame = null
         workspace.locked = false
-        resizeItem?.let { updateWidgetSize(it) }
+        resizeItem?.let {
+            if (it.snap) {
+                // Clean up px → dp rounding so the widget sits exactly on cell lines.
+                val (pw, ph) = workspace.contentSizeDp()
+                it.snapToGrid(pw, ph, config.columns, config.rows)
+                workspace.pageAt(it.pageX, it.pageY)?.requestLayout()
+            }
+            updateWidgetSize(it)
+        }
         resizeItem = null
         save()
     }
@@ -838,6 +862,8 @@ class LauncherActivity : Activity(), WorkspaceView.Callbacks {
     private fun applySettings() {
         val (w, h) = workspace.contentSizeDp()
         model.normalize(w, h)
+        // Grid-fixed widgets follow the new grid.
+        if (model.snapWidgets(w, h)) for (wi in model.widgets()) if (wi.snap) updateWidgetSize(wi)
         root.requestApplyInsets()
         applyColorMode()
         saveAndSync()
@@ -1264,6 +1290,7 @@ class LauncherActivity : Activity(), WorkspaceView.Callbacks {
         private const val CROP_MAX_PX = 2048
         private const val M_SHORTCUT_BASE = 1000
         const val MIN_WIDGET_DP = 40f
+        private const val M_SNAP = 20
         private const val M_SPAN_MENU = 21
         /** Icon size items: M_SPAN_BASE + index into GridItem.SPANS (must stay below M_SHORTCUT_BASE). */
         private const val M_SPAN_BASE = 900
