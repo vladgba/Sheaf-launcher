@@ -95,6 +95,19 @@ object Dialogs {
         }
         col.addView(snapWidgets)
 
+        // Icon shape
+        col.addView(TextView(ctx).apply {
+            text = "Icon shape"; textSize = 16f
+            setPadding(0, a.dpi(16f), 0, a.dpi(4f))
+        })
+        val shapes = listOf("system" to "Original", "square" to "Square", "rounded" to "Rounded")
+        val shapeGroup = RadioGroup(ctx).apply { orientation = RadioGroup.HORIZONTAL }
+        for ((key, name) in shapes) shapeGroup.addView(RadioButton(ctx).apply {
+            id = View.generateViewId(); text = name; tag = key
+            isChecked = key == cfg.iconShape
+            setPadding(0, 0, a.dpi(12f), 0)
+        })
+        col.addView(shapeGroup)
 
         // Color mode
         col.addView(TextView(ctx).apply {
@@ -165,6 +178,8 @@ object Dialogs {
                 cfg.pagesX = px.value; cfg.pagesY = py.value
                 cfg.iconScale = scale.value; cfg.showLabels = labels.isChecked
                 cfg.snapNewWidgets = snapWidgets.isChecked
+                cfg.iconShape = (0 until shapeGroup.childCount).map { shapeGroup.getChildAt(it) as RadioButton }
+                    .firstOrNull { it.isChecked }?.tag as? String ?: "system"
                 cfg.folderColumns = fcols.value; cfg.folderRows = frows.value
                 val picked = (0 until group.childCount).map { group.getChildAt(it) as RadioButton }
                     .firstOrNull { it.isChecked }?.tag as? HomeAction
@@ -266,7 +281,7 @@ object Dialogs {
     ) {
         val b = builder(a)
         val ctx = b.context
-        val icon = AppIconView(ctx).apply { showLabel = false; isClickable = false; preview(this) }
+        val icon = AppIconView(ctx).apply { showLabel = false; isClickable = false; shape = a.config.iconShape; preview(this) }
         val name = EditText(ctx).apply {
             setSingleLine()
             this.hint = hint

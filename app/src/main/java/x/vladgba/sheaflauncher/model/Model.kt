@@ -92,6 +92,7 @@ class LauncherConfig {
     var layoutLocked = false // no moving, resizing, adding or removing items
     var homeAction = "none" // Home pressed on the default page: none | lock | notifications | quick_settings
     var homeY = 0
+    var iconShape = "system" // system | square | rounded
     var snapNewWidgets = false // widgets added from the picker start fixed to the grid
 
     fun toJson(): JSONObject = JSONObject()
@@ -101,7 +102,7 @@ class LauncherConfig {
         .put("homeX", homeX).put("homeY", homeY)
         .put("folderColumns", folderColumns).put("folderRows", folderRows)
         .put("homeAction", homeAction).put("layoutLocked", layoutLocked).put("colorMode", colorMode)
-        .put("snapNewWidgets", snapNewWidgets)
+        .put("iconShape", iconShape).put("snapNewWidgets", snapNewWidgets)
 
     fun readJson(o: JSONObject) {
         columns = o.optInt("columns", columns).coerceIn(MIN_GRID, MAX_GRID)
@@ -115,6 +116,7 @@ class LauncherConfig {
         homeAction = o.optString("homeAction", homeAction)
         layoutLocked = o.optBoolean("layoutLocked", layoutLocked)
         colorMode = o.optString("colorMode", colorMode)
+        iconShape = o.optString("iconShape", iconShape).takeIf { it in ICON_SHAPES } ?: "system"
         snapNewWidgets = o.optBoolean("snapNewWidgets", snapNewWidgets)
         homeX = o.optInt("homeX", homeX).coerceIn(0, pagesX - 1)
         homeY = o.optInt("homeY", homeY).coerceIn(0, pagesY - 1)
@@ -126,6 +128,7 @@ class LauncherConfig {
         const val MAX_PAGES = 12
         const val MIN_FOLDER_GRID = 1
         const val MAX_FOLDER_GRID = 8
+        val ICON_SHAPES = listOf("system", "square", "rounded")
     }
 }
 

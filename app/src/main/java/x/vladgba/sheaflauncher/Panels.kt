@@ -74,6 +74,7 @@ object Panels {
                 label = a.labelFor(component)
                 showLabel = cfg.showLabels
                 iconScale = cfg.iconScale / 100f
+                shape = cfg.iconShape
                 labelColor = Palette.cardText
                 labelShadow = false
                 tag = component

@@ -473,6 +473,7 @@ class LauncherActivity : Activity(), WorkspaceView.Callbacks {
         icon.applyHomePalette()
         icon.showLabel = model.config.showLabels
         icon.iconScale = model.config.iconScale / 100f
+        icon.shape = model.config.iconShape
         when (item) {
             is AppItem -> { icon.icon = iconFor(item.component); icon.label = labelFor(item.component) }
             is FolderItem -> { bindFolderIcon(item, icon); icon.label = item.title }
