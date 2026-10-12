@@ -48,8 +48,18 @@ class AppItem(id: Long, val component: String) : GridItem(id)
 
 class FolderItem(id: Long, var title: String, val apps: MutableList<String>) : GridItem(id)
 
-/** Widgets ignore the grid: free position and size, stored in dp relative to the page content area. */
-class WidgetItem(id: Long, val appWidgetId: Int, val provider: String) : HomeItem(id) {
+/**
+ * Widgets ignore the grid: free position and size, stored in dp relative to the page content area.
+ * [appWidgetId] is [NO_WIDGET_ID] for a placeholder: a widget from a backup that still has to be
+ * re-created (widget ids belong to one install), drawn as "tap to restore".
+ */
+class WidgetItem(id: Long, var appWidgetId: Int, val provider: String) : HomeItem(id) {
+    val needsRestore get() = appWidgetId == NO_WIDGET_ID
+
+    companion object {
+        const val NO_WIDGET_ID = -1
+    }
+
     var x = 0f
     var y = 0f
     var w = 0f

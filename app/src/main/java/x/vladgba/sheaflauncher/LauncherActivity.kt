@@ -52,6 +52,7 @@ import x.vladgba.sheaflauncher.ui.PageIndicator
 import x.vladgba.sheaflauncher.ui.PageView
 import x.vladgba.sheaflauncher.ui.ResizeFrame
 import x.vladgba.sheaflauncher.ui.WorkspaceView
+import x.vladgba.sheaflauncher.ui.dp
 import x.vladgba.sheaflauncher.ui.dpi
 import java.io.File
 import java.io.FileOutputStream
@@ -97,6 +98,10 @@ class LauncherActivity : Activity(), WorkspaceView.Callbacks {
     private var dragWidgetInfo: AppWidgetProviderInfo? = null
     /** Where a dropped widget goes once bound/configured (null → page centre). */
     private var pendingPlacement: WidgetItem? = null
+    /** Placeholder widget (from a backup) currently being re-created, or -1. */
+    private var pendingRestoreId = -1L
+    /** Placeholders the user declined this session: not offered again until tapped. */
+    private val skippedRestores = HashSet<Long>()
 
     private var resizeFrame: ResizeFrame? = null
     private var resizeItem: WidgetItem? = null
@@ -138,6 +143,7 @@ class LauncherActivity : Activity(), WorkspaceView.Callbacks {
             pendingWidgetId = it.getInt(STATE_PENDING_WIDGET, -1)
             if (pendingWidgetId != -1) pendingWidgetInfo = widgetManager.getAppWidgetInfo(pendingWidgetId)
             pendingIconComponent = it.getString(STATE_ICON_COMPONENT)
+            pendingRestoreId = it.getLong(STATE_RESTORE, -1L)
             it.getFloatArray(STATE_PLACEMENT)?.takeIf { f -> f.size == 6 }?.let { f ->
                 pendingPlacement = WidgetItem(-1, -1, "").apply {
                     pageX = f[0].toInt(); pageY = f[1].toInt(); x = f[2]; y = f[3]; w = f[4]; h = f[5]
@@ -179,6 +185,7 @@ class LauncherActivity : Activity(), WorkspaceView.Callbacks {
     override fun onSaveInstanceState(outState: Bundle) {
         super.onSaveInstanceState(outState)
         outState.putInt(STATE_PENDING_WIDGET, pendingWidgetId)
+        outState.putLong(STATE_RESTORE, pendingRestoreId)
         pendingIconComponent?.let { outState.putString(STATE_ICON_COMPONENT, it) }
         pendingPlacement?.let {
             outState.putFloatArray(STATE_PLACEMENT,
@@ -281,6 +288,8 @@ class LauncherActivity : Activity(), WorkspaceView.Callbacks {
                 }
                 saveAndSync()
                 io.execute { iconCache.store(list) }
+                // Widgets from a backup whose app is (now) installed get re-created.
+                restoreNextWidget()
             }
         }
     }
@@ -482,6 +491,7 @@ class LauncherActivity : Activity(), WorkspaceView.Callbacks {
     }
 
     private fun createWidgetView(item: WidgetItem): View {
+        if (item.needsRestore) return restoreView(item)
         val info = widgetManager.getAppWidgetInfo(item.appWidgetId)
             ?: return unavailableView(item)
         val v = try {
@@ -503,6 +513,49 @@ class LauncherActivity : Activity(), WorkspaceView.Callbacks {
         gravity = Gravity.CENTER
         setBackgroundColor(0x44000000)
         setOnClickListener { reloadWidget(item) }
+    }
+
+    /** Placeholder for a widget from a backup that hasn't been re-created yet. */
+    private fun restoreView(item: WidgetItem) = TextView(this).apply {
+        val info = providerInfo(item.provider)
+        val name = info?.loadLabel(packageManager)
+            ?: ComponentName.unflattenFromString(item.provider)?.packageName?.let { pkg ->
+                apps.values.firstOrNull { it.packageName == pkg }?.label ?: pkg
+            } ?: "Widget"
+        text = if (info != null) "$name\n\nTap to restore\nLong-press to remove"
+               else "$name\n\nApp not installed\nLong-press to remove"
+        setTextColor(Palette.cardText)
+        textSize = 13f
+        gravity = Gravity.CENTER
+        setPadding(dpi(8f), dpi(8f), dpi(8f), dpi(8f))
+        // Opaque card, so icons under the widget's area don't show through the text.
+        background = android.graphics.drawable.GradientDrawable().apply {
+            setColor(Palette.card); cornerRadius = dp(16f)
+        }
+        setOnClickListener {
+            skippedRestores.remove(item.id)
+            if (providerInfo(item.provider) == null) toast("Install the app first") else restoreWidget(item)
+        }
+    }
+
+    private fun providerInfo(provider: String): AppWidgetProviderInfo? =
+        widgetManager.installedProviders.firstOrNull { it.provider.flattenToString() == provider }
+
+    /** Re-creates the next placeholder whose app is installed (one at a time: binding may need a dialog). */
+    private fun restoreNextWidget() {
+        if (isDestroyed || pendingWidgetId != -1 || pendingRestoreId != -1L) return
+        val next = model.widgets().firstOrNull {
+            it.needsRestore && it.id !in skippedRestores && providerInfo(it.provider) != null
+        } ?: return
+        restoreWidget(next)
+    }
+
+    private fun restoreWidget(item: WidgetItem) {
+        if (pendingWidgetId != -1 || pendingRestoreId != -1L) return
+        val info = providerInfo(item.provider) ?: return
+        pendingRestoreId = item.id
+        pendingPlacement = null
+        addWidget(info)
     }
 
     /** Throws away a widget's view and creates it again. */
@@ -674,7 +727,7 @@ class LauncherActivity : Activity(), WorkspaceView.Callbacks {
             M_REMOVE -> {
                 val w = item as WidgetItem
                 model.items.remove(w)
-                widgetHost.deleteAppWidgetId(w.appWidgetId)
+                if (!w.needsRestore) widgetHost.deleteAppWidgetId(w.appWidgetId)
                 saveAndSync()
             }
         }
@@ -758,7 +811,22 @@ class LauncherActivity : Activity(), WorkspaceView.Callbacks {
         val info = pendingWidgetInfo ?: widgetManager.getAppWidgetInfo(pendingWidgetId)
         val id = pendingWidgetId
         pendingWidgetId = -1; pendingWidgetInfo = null
+        val restoreId = pendingRestoreId
+        pendingRestoreId = -1L
         if (info == null || id == -1) return
+        if (restoreId != -1L) {
+            // Restoring a backup placeholder: same item, place and size, new widget id.
+            val target = model.widgets().firstOrNull { it.id == restoreId && it.needsRestore }
+            if (target == null) {
+                widgetHost.deleteAppWidgetId(id)
+            } else {
+                target.appWidgetId = id
+                workspace.itemViews.remove(target.id)?.let { (it.parent as? android.view.ViewGroup)?.removeView(it) }
+                saveAndSync()
+            }
+            main.post { restoreNextWidget() }
+            return
+        }
         val d = resources.displayMetrics.density
         val (pw, ph) = workspace.contentSizeDp()
         val item = WidgetItem(model.newId(), id, info.provider.flattenToString())
@@ -785,6 +853,12 @@ class LauncherActivity : Activity(), WorkspaceView.Callbacks {
     private fun abortPendingWidget() {
         if (pendingWidgetId != -1) widgetHost.deleteAppWidgetId(pendingWidgetId)
         pendingWidgetId = -1; pendingWidgetInfo = null; pendingPlacement = null
+        if (pendingRestoreId != -1L) {
+            // Declined/cancelled: keep the placeholder (tap it to retry), go on with the others.
+            skippedRestores += pendingRestoreId
+            pendingRestoreId = -1L
+            main.post { restoreNextWidget() }
+        }
     }
 
     @Deprecated("Deprecated in Java")
@@ -811,7 +885,8 @@ class LauncherActivity : Activity(), WorkspaceView.Callbacks {
     }
 
     private fun removeDeadWidgets() {
-        val dead = model.widgets().filter { widgetManager.getAppWidgetInfo(it.appWidgetId) == null }
+        // Placeholders stay until restored or removed by the user (their app may be installed later).
+        val dead = model.widgets().filter { !it.needsRestore && widgetManager.getAppWidgetInfo(it.appWidgetId) == null }
         for (w in dead) { model.items.remove(w); widgetHost.deleteAppWidgetId(w.appWidgetId) }
     }
 
@@ -1173,7 +1248,8 @@ class LauncherActivity : Activity(), WorkspaceView.Callbacks {
         android.app.AlertDialog.Builder(this)
             .setTitle("Import settings?")
             .setMessage("This replaces the current layout, settings, hidden apps and custom icons. " +
-                    "Widgets from another device can't be restored and will be removed.")
+                    "Widgets are re-added in their places: Android may ask to allow each one " +
+                    "(tick \"Always allow\" to skip the rest), and some widgets need setting up again.")
             .setNegativeButton(android.R.string.cancel, null)
             .setPositiveButton("Import") { _, _ -> readBackup(uri) }
             .show()
@@ -1198,9 +1274,10 @@ class LauncherActivity : Activity(), WorkspaceView.Callbacks {
     }
 
     private fun applyBackup(imported: WorkspaceModel, iconFiles: org.json.JSONObject?) {
-        // Widget ids belong to this install; keep only ones our host still owns.
+        // Widget ids belong to one install. Ids our host still owns are kept as they are;
+        // the rest become placeholders that are re-created (bound again) after the restart.
         val ownIds = widgetHost.appWidgetIds.toHashSet()
-        imported.items.removeAll { it is WidgetItem && it.appWidgetId !in ownIds }
+        for (w in imported.widgets()) if (w.appWidgetId !in ownIds) w.appWidgetId = WidgetItem.NO_WIDGET_ID
 
         customIconDir.listFiles()?.forEach { it.delete() }
         customIconCache.clear()
@@ -1278,6 +1355,7 @@ class LauncherActivity : Activity(), WorkspaceView.Callbacks {
         private const val REQ_RECONFIGURE = 13
         private const val STATE_PENDING_WIDGET = "pending_widget"
         private const val STATE_PLACEMENT = "pending_placement"
+        private const val STATE_RESTORE = "pending_restore"
         private const val MAX_MENU_SHORTCUTS = 5
         private const val M_GESTURES = 13
         private const val M_HIDE = 14
