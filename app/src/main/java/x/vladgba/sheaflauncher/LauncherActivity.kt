@@ -596,6 +596,7 @@ class LauncherActivity : Activity(), WorkspaceView.Callbacks {
             is FolderItem -> {
                 m.add(0, M_OPEN, 0, "Open"); m.add(0, M_RENAME, 1, "Edit icon & name…")
                 if (!isLayoutLocked()) {
+                    addIconSizeMenu(m, item, 2)
                     m.add(0, M_FRONT, 2, "Bring to front"); m.add(0, M_BACK, 3, "Send to back")
                     m.add(0, M_UNGROUP, 4, "Ungroup")
                 }
@@ -613,11 +614,28 @@ class LauncherActivity : Activity(), WorkspaceView.Callbacks {
                 if (m.size() == 0) { toast("Layout is locked"); return }
             }
         }
-        pm.setOnMenuItemClickListener { onItemMenu(item, view, it.itemId); true }
+        pm.setOnMenuItemClickListener {
+            if (!it.hasSubMenu()) onItemMenu(item, view, it.itemId) // header just opens the submenu
+            true
+        }
         pm.show()
     }
 
+    /** "Icon size" submenu (1× / 1.5× / 2×) for apps and folders on the home screen. */
+    private fun addIconSizeMenu(m: android.view.Menu, item: GridItem, order: Int, group: Int = 0) {
+        val sub = m.addSubMenu(group, M_SPAN_MENU, order, "Icon size")
+        GridItem.SPANS.forEachIndexed { i, span ->
+            val name = if (span == 1.5f) "1.5×" else "${span.toInt()}×"
+            sub.add(1, M_SPAN_BASE + i, i, name).isChecked = item.span == span
+        }
+        sub.setGroupCheckable(1, true, true)
+    }
+
     private fun onItemMenu(item: HomeItem, view: View, id: Int) {
+        if (id in M_SPAN_BASE until M_SPAN_BASE + GridItem.SPANS.size) {
+            (item as? GridItem)?.let { setSpan(it, GridItem.SPANS[id - M_SPAN_BASE]) }
+            return
+        }
         when (id) {
             M_FRONT -> { model.bringToFront(item); workspace.refreshOrder(item); save() }
             M_BACK -> { model.sendToBack(item); workspace.refreshOrder(item); save() }
@@ -647,6 +665,17 @@ class LauncherActivity : Activity(), WorkspaceView.Callbacks {
                 saveAndSync()
             }
         }
+    }
+
+    /** Changes an app's / folder's icon size; keeps it on the page by moving it up/left if needed. */
+    private fun setSpan(item: GridItem, span: Float) {
+        val grew = span > item.span
+        item.span = span
+        if (grew) model.bringToFront(item) // a bigger icon shouldn't hide under its neighbours
+        val n = item.cellsCovered
+        item.cellX = item.cellX.coerceAtMost((config.columns - n).coerceAtLeast(0))
+        item.cellY = item.cellY.coerceAtMost((config.rows - n).coerceAtLeast(0))
+        saveAndSync()
     }
 
     // ================================================================= folders
@@ -936,6 +965,7 @@ class LauncherActivity : Activity(), WorkspaceView.Callbacks {
         val unlocked = !isLayoutLocked()
         if (homeItem != null) {
             if (unlocked) {
+                addIconSizeMenu(m, homeItem, o++, group = 2)
                 m.add(2, M_FRONT, o++, "Bring to front"); m.add(2, M_BACK, o++, "Send to back")
                 m.add(2, M_FOLDER, o++, "Move to folder…")
             }
@@ -946,6 +976,7 @@ class LauncherActivity : Activity(), WorkspaceView.Callbacks {
         if (unlocked) m.add(2, M_HIDE, o++, "Hide app")
         m.add(2, M_UNINSTALL, o, "Uninstall")
         pm.setOnMenuItemClickListener { mi ->
+            if (mi.hasSubMenu()) return@setOnMenuItemClickListener false // let it open
             val id = mi.itemId
             if (id >= M_SHORTCUT_BASE) {
                 val sc = list[id - M_SHORTCUT_BASE]
@@ -1233,6 +1264,9 @@ class LauncherActivity : Activity(), WorkspaceView.Callbacks {
         private const val CROP_MAX_PX = 2048
         private const val M_SHORTCUT_BASE = 1000
         const val MIN_WIDGET_DP = 40f
+        private const val M_SPAN_MENU = 21
+        /** Icon size items: M_SPAN_BASE + index into GridItem.SPANS (must stay below M_SHORTCUT_BASE). */
+        private const val M_SPAN_BASE = 900
 
         private const val M_FRONT = 1; private const val M_BACK = 2; private const val M_FOLDER = 3
         private const val M_INFO = 4; private const val M_UNINSTALL = 5; private const val M_OPEN = 6

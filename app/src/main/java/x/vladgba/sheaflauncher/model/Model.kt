@@ -23,6 +23,23 @@ sealed class GridItem(id: Long) : HomeItem(id) {
     var cellX = 0
     var cellY = 0
 
+    /**
+     * Icon size in cells, Windows Phone style: 1 (normal), 1.5 or 2 (large).
+     * The item is anchored at its top-left cell and covers [cellsCovered] cells each way.
+     */
+    var span = 1f
+        set(value) { field = normalizeSpan(value) }
+
+    val cellsCovered: Int get() = kotlin.math.ceil(span - 0.001f).toInt().coerceAtLeast(1)
+
+    /** True if this item's area includes cell ([cx], [cy]). */
+    fun covers(cx: Int, cy: Int) = cx in cellX until cellX + cellsCovered && cy in cellY until cellY + cellsCovered
+
+    companion object {
+        val SPANS = floatArrayOf(1f, 1.5f, 2f)
+        fun normalizeSpan(v: Float): Float = SPANS.minByOrNull { abs(it - v) } ?: 1f
+    }
+
     /** Transient: true while waiting for [WorkspaceModel.placeItems]. */
     var needsPlacement = false
 }
@@ -136,9 +153,10 @@ class WorkspaceModel {
     fun widgets() = items.filterIsInstance<WidgetItem>()
     fun folders() = items.filterIsInstance<FolderItem>()
 
+    /** Topmost folder whose area (large folders cover several cells) includes the cell. */
     fun folderAt(px: Int, py: Int, cx: Int, cy: Int): FolderItem? = items
         .filterIsInstance<FolderItem>()
-        .filter { it.pageX == px && it.pageY == py && it.cellX == cx && it.cellY == cy }
+        .filter { it.pageX == px && it.pageY == py && it.covers(cx, cy) }
         .maxByOrNull { it.z }
 
     /**
@@ -237,9 +255,12 @@ class WorkspaceModel {
             val ch = if (pageHdp > 0) pageHdp / c.rows else 1f
             for (item in itemsOn(px, py)) {
                 when (item) {
-                    is GridItem -> if (item.id !in pendingIds &&
-                        item.cellX in 0 until c.columns && item.cellY in 0 until c.rows
-                    ) g[item.cellY * c.columns + item.cellX] = true
+                    is GridItem -> if (item.id !in pendingIds) {
+                        // Large icons block every cell they cover.
+                        for (cy in item.cellY until item.cellY + item.cellsCovered)
+                            for (cx in item.cellX until item.cellX + item.cellsCovered)
+                                if (cx in 0 until c.columns && cy in 0 until c.rows) g[cy * c.columns + cx] = true
+                    }
 
                     is WidgetItem -> for (cy in 0 until c.rows) for (cx in 0 until c.columns) {
                         val mx = (cx + 0.5f) * cw
@@ -291,11 +312,11 @@ class WorkspaceModel {
                 .put("id", item.id).put("px", item.pageX).put("py", item.pageY).put("z", item.z)
             when (item) {
                 is AppItem -> o.put("type", "app").put("component", item.component)
-                    .put("cx", item.cellX).put("cy", item.cellY)
+                    .put("cx", item.cellX).put("cy", item.cellY).put("span", item.span.toDouble())
 
                 is FolderItem -> o.put("type", "folder").put("title", item.title)
                     .put("apps", JSONArray(item.apps))
-                    .put("cx", item.cellX).put("cy", item.cellY)
+                    .put("cx", item.cellX).put("cy", item.cellY).put("span", item.span.toDouble())
 
                 is WidgetItem -> o.put("type", "widget").put("widgetId", item.appWidgetId)
                     .put("provider", item.provider)
@@ -335,14 +356,14 @@ class WorkspaceModel {
                 val id = o.getLong("id")
                 val item: HomeItem = when (o.optString("type")) {
                     "app" -> AppItem(id, o.getString("component")).apply {
-                        cellX = o.optInt("cx"); cellY = o.optInt("cy")
+                        cellX = o.optInt("cx"); cellY = o.optInt("cy"); span = o.optDouble("span", 1.0).toFloat()
                     }
 
                     "folder" -> {
                         val a = o.optJSONArray("apps") ?: JSONArray()
                         FolderItem(id, o.optString("title", "Folder"),
                             MutableList(a.length()) { a.getString(it) }).apply {
-                            cellX = o.optInt("cx"); cellY = o.optInt("cy")
+                            cellX = o.optInt("cx"); cellY = o.optInt("cy"); span = o.optDouble("span", 1.0).toFloat()
                         }
                     }
 

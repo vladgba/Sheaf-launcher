@@ -49,10 +49,15 @@ class PageView(context: Context, private val config: LauncherConfig, val pageX: 
     /** Item bounds in this page's coordinates (padding included). */
     fun rectFor(item: HomeItem, out: Rect) {
         when (item) {
-            is GridItem -> out.set(
-                (item.cellX * cellW).roundToInt(), (item.cellY * cellH).roundToInt(),
-                ((item.cellX + 1) * cellW).roundToInt(), ((item.cellY + 1) * cellH).roundToInt()
-            )
+            is GridItem -> {
+                // Large icons (1.5× / 2×) grow right and down from their cell,
+                // shifted back if they would stick out of the page.
+                val w = cellW * item.span
+                val h = cellH * item.span
+                val l = (item.cellX * cellW).coerceAtMost(contentW - w).coerceAtLeast(0f)
+                val t = (item.cellY * cellH).coerceAtMost(contentH - h).coerceAtLeast(0f)
+                out.set(l.roundToInt(), t.roundToInt(), (l + w).roundToInt(), (t + h).roundToInt())
+            }
 
             is WidgetItem -> out.set(
                 (item.x * density).roundToInt(), (item.y * density).roundToInt(),

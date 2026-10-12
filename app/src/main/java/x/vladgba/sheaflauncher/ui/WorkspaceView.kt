@@ -535,9 +535,18 @@ class WorkspaceView(context: Context, private val dragLayer: FrameLayout) : View
                 val c = model.config
                 when (item) {
                     is GridItem -> {
-                        val cx = floor((lx + v.width / 2f) / page.cellW).toInt().coerceIn(0, c.columns - 1)
-                        val cy = floor((ly + v.height / 2f) / page.cellH).toInt().coerceIn(0, c.rows - 1)
-                        if (item is AppItem) folder = model.folderAt(curX, curY, cx, cy)
+                        // The view's top-left cell is the anchor (same as the centre for 1× icons).
+                        val n = item.cellsCovered
+                        val cx = floor((lx + page.cellW / 2f) / page.cellW).toInt()
+                            .coerceIn(0, (c.columns - n).coerceAtLeast(0))
+                        val cy = floor((ly + page.cellH / 2f) / page.cellH).toInt()
+                            .coerceIn(0, (c.rows - n).coerceAtLeast(0))
+                        if (item is AppItem) {
+                            // Folder under the finger's icon centre.
+                            val fx = floor((lx + v.width / 2f) / page.cellW).toInt().coerceIn(0, c.columns - 1)
+                            val fy = floor((ly + v.height / 2f) / page.cellH).toInt().coerceIn(0, c.rows - 1)
+                            folder = model.folderAt(curX, curY, fx, fy)
+                        }
                         item.cellX = cx; item.cellY = cy
                     }
                     is WidgetItem -> {
