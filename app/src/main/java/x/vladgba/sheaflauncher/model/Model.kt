@@ -68,6 +68,9 @@ class WidgetItem(id: Long, var appWidgetId: Int, val provider: String) : HomeIte
     /** Fixed to the icon grid: position and size are whole cells. */
     var snap = false
 
+    /** Remove spacing around this widget when hosted on the workspace. */
+    var removePadding = false
+
     /**
      * Rounds position and size to whole cells of a [pageWdp] × [pageHdp] page
      * with [cols] × [rows] cells (at least one cell each way, kept on the page).
@@ -368,6 +371,7 @@ class WorkspaceModel {
                     .put("x", item.x.toDouble()).put("y", item.y.toDouble())
                     .put("w", item.w.toDouble()).put("h", item.h.toDouble())
                     .put("snap", item.snap)
+                    .put("removePadding", item.removePadding)
             }
             arr.put(o)
         }
@@ -417,6 +421,7 @@ class WorkspaceModel {
                         x = o.optDouble("x", 0.0).toFloat(); y = o.optDouble("y", 0.0).toFloat()
                         w = o.optDouble("w", 100.0).toFloat(); h = o.optDouble("h", 100.0).toFloat()
                         snap = o.optBoolean("snap", false)
+                        removePadding = o.optBoolean("removePadding", false)
                     }
 
                     else -> continue
