@@ -499,7 +499,6 @@ class LauncherActivity : Activity(), WorkspaceView.Callbacks {
         } catch (e: Exception) {
             return unavailableView(item)
         }
-        v.setPadding(0, 0, 0, 0)
         (v as? SheafWidgetHostView)?.onRetry = { reloadWidget(item) }
         // Give the provider its real size right away; many widgets only render after this.
         updateWidgetSize(item, v)
@@ -578,6 +577,11 @@ class LauncherActivity : Activity(), WorkspaceView.Callbacks {
 
     /** Tells the widget its real size so it can pick a layout. */
     private fun updateWidgetSize(item: WidgetItem, view: View? = workspace.itemViews[item.id]) {
+        if (view is SheafWidgetHostView) {
+            view.removePadding = item.removePadding
+            view.updateWorkspaceSize(item.w, item.h)
+            return
+        }
         val v = view as? AppWidgetHostView ?: return
         if (Build.VERSION.SDK_INT >= 31) {
             v.updateAppWidgetSize(Bundle(), listOf(SizeF(item.w, item.h)))
