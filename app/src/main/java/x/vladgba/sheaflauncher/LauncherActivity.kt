@@ -665,6 +665,9 @@ class LauncherActivity : Activity(), WorkspaceView.Callbacks {
                     m.add(0, M_RESIZE, 0, "Resize / move")
                     m.add(0, M_SIZE, 1, "Set exact size…")
                     m.add(0, M_SNAP, 1, "Fix to grid").apply { isCheckable = true; isChecked = item.snap }
+                    m.add(0, M_REMOVE_PADDING, 1, "Remove padding").apply {
+                        isCheckable = true; isChecked = item.removePadding
+                    }
                     m.add(0, M_FRONT, 2, "Bring to front"); m.add(0, M_BACK, 3, "Send to back")
                 }
                 val info = widgetManager.getAppWidgetInfo(item.appWidgetId)
@@ -724,6 +727,13 @@ class LauncherActivity : Activity(), WorkspaceView.Callbacks {
                 }
                 saveAndSync(); updateWidgetSize(w)
                 toast(if (w.snap) "Widget fixed to grid" else "Widget moves freely")
+            }
+            M_REMOVE_PADDING -> {
+                if (isLayoutLocked()) return
+                val w = item as WidgetItem
+                w.removePadding = !w.removePadding
+                save()
+                updateWidgetSize(w)
             }
             M_RECONFIGURE -> try {
                 widgetHost.startAppWidgetConfigureActivityForResult(this, (item as WidgetItem).appWidgetId, 0, REQ_RECONFIGURE, null)
@@ -1375,6 +1385,7 @@ class LauncherActivity : Activity(), WorkspaceView.Callbacks {
         const val MIN_WIDGET_DP = 40f
         private const val M_SNAP = 20
         private const val M_SPAN_MENU = 21
+        private const val M_REMOVE_PADDING = 22
         /** Icon size items: M_SPAN_BASE + index into GridItem.SPANS (must stay below M_SHORTCUT_BASE). */
         private const val M_SPAN_BASE = 900
 
