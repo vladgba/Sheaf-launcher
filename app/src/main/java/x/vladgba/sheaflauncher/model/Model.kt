@@ -72,12 +72,40 @@ class WidgetItem(id: Long, var appWidgetId: Int, val provider: String) : HomeIte
     var removePadding = false
 
     /**
+     * Transient: position and size as fractions of the page, read from a backup.
+     * Backups move between devices with different screens, so dp values alone don't fit.
+     */
+    var relative: FloatArray? = null
+
+    /**
+     * Converts [relative] (if any) to dp for a [pageWdp] × [pageHdp] page, keeping the
+     * widget on the page, then snaps it to the [cols] × [rows] grid if it is grid-fixed.
+     */
+    fun fitToPage(pageWdp: Float, pageHdp: Float, cols: Int, rows: Int) {
+        if (!usablePage(pageWdp, pageHdp)) return
+        relative?.takeIf(::validRelative)?.let { (fx, fy, fw, fh) ->
+            // Clamp fractions before multiplying so oversized finite inputs cannot overflow.
+            w = fw.coerceAtMost(1f) * pageWdp
+            h = fh.coerceAtMost(1f) * pageHdp
+            x = fx.coerceAtMost(1f) * pageWdp
+            y = fy.coerceAtMost(1f) * pageHdp
+        }
+        // Legacy backups retain dp where it fits, with the same bounds as scaled backups.
+        w = (if (w.isFinite()) w else 100f).coerceIn(1f, pageWdp)
+        h = (if (h.isFinite()) h else 100f).coerceIn(1f, pageHdp)
+        x = (if (x.isFinite()) x else 0f).coerceIn(0f, pageWdp - w)
+        y = (if (y.isFinite()) y else 0f).coerceIn(0f, pageHdp - h)
+        relative = null
+        if (snap) snapToGrid(pageWdp, pageHdp, cols, rows)
+    }
+
+    /**
      * Rounds position and size to whole cells of a [pageWdp] × [pageHdp] page
      * with [cols] × [rows] cells (at least one cell each way, kept on the page).
      * @return true if anything moved
      */
     fun snapToGrid(pageWdp: Float, pageHdp: Float, cols: Int, rows: Int): Boolean {
-        if (pageWdp <= 0f || pageHdp <= 0f) return false
+        if (!usablePage(pageWdp, pageHdp) || cols <= 0 || rows <= 0) return false
         val cw = pageWdp / cols
         val ch = pageHdp / rows
         val sw = Math.round(w / cw).coerceIn(1, cols)
@@ -353,7 +381,12 @@ class WorkspaceModel {
 
     // ---------------------------------------------------------------- JSON
 
-    fun toJson(): JSONObject {
+    /**
+     * @param pageWdp,pageHdp page content size; when given (backups), widgets also get their
+     * geometry as page fractions ("rel") so they can be scaled to another device's screen.
+     */
+    fun toJson(pageWdp: Float = 0f, pageHdp: Float = 0f): JSONObject {
+        val withRel = usablePage(pageWdp, pageHdp)
         val arr = JSONArray()
         for (item in items) {
             val o = JSONObject()
@@ -372,6 +405,11 @@ class WorkspaceModel {
                     .put("w", item.w.toDouble()).put("h", item.h.toDouble())
                     .put("snap", item.snap)
                     .put("removePadding", item.removePadding)
+                    .apply {
+                        if (withRel) put("rel", JSONArray().put(item.x.toDouble() / pageWdp)
+                            .put(item.y.toDouble() / pageHdp).put(item.w.toDouble() / pageWdp)
+                            .put(item.h.toDouble() / pageHdp))
+                    }
             }
             arr.put(o)
         }
@@ -418,10 +456,14 @@ class WorkspaceModel {
                     }
 
                     "widget" -> WidgetItem(id, o.getInt("widgetId"), o.optString("provider")).apply {
-                        x = o.optDouble("x", 0.0).toFloat(); y = o.optDouble("y", 0.0).toFloat()
-                        w = o.optDouble("w", 100.0).toFloat(); h = o.optDouble("h", 100.0).toFloat()
+                        x = o.finiteFloat("x", 0f); y = o.finiteFloat("y", 0f)
+                        w = o.finiteFloat("w", 100f).coerceAtLeast(1f)
+                        h = o.finiteFloat("h", 100f).coerceAtLeast(1f)
                         snap = o.optBoolean("snap", false)
                         removePadding = o.optBoolean("removePadding", false)
+                        relative = o.optJSONArray("rel")?.takeIf { it.length() == 4 }?.let { r ->
+                            FloatArray(4) { r.optDouble(it, Double.NaN).toFloat() }
+                        }?.takeIf(::validRelative)
                     }
 
                     else -> continue
@@ -434,3 +476,12 @@ class WorkspaceModel {
         }
     }
 }
+
+private fun usablePage(width: Float, height: Float) =
+    width.isFinite() && height.isFinite() && width >= 1f && height >= 1f
+
+private fun validRelative(r: FloatArray) = r.size == 4 &&
+    r.all { it.isFinite() && it >= 0f } && r[2] > 0f && r[3] > 0f
+
+private fun JSONObject.finiteFloat(key: String, fallback: Float) =
+    optDouble(key, fallback.toDouble()).toFloat().takeIf { it.isFinite() } ?: fallback

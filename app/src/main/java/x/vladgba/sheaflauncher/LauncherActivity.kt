@@ -1241,7 +1241,9 @@ class LauncherActivity : Activity(), WorkspaceView.Callbacks {
     }
 
     private fun writeBackup(uri: Uri) {
-        val json = model.toJson()
+        // Widget geometry also goes out as page fractions, so it fits another screen size.
+        val (pw, ph) = workspace.contentSizeDp()
+        val json = model.toJson(pw, ph)
         io.execute {
             val ok = try {
                 val icons = org.json.JSONObject()
@@ -1288,10 +1290,19 @@ class LauncherActivity : Activity(), WorkspaceView.Callbacks {
     }
 
     private fun applyBackup(imported: WorkspaceModel, iconFiles: org.json.JSONObject?) {
+        val (pw, ph) = workspace.contentSizeDp()
+        if (!pw.isFinite() || !ph.isFinite() || pw < 1f || ph < 1f) {
+            toast("Page size is not available; try importing again")
+            return
+        }
         // Widget ids belong to one install. Ids our host still owns are kept as they are;
         // the rest become placeholders that are re-created (bound again) after the restart.
         val ownIds = widgetHost.appWidgetIds.toHashSet()
         for (w in imported.widgets()) if (w.appWidgetId !in ownIds) w.appWidgetId = WidgetItem.NO_WIDGET_ID
+        // Scale widgets to this screen (backups store them as page fractions) and re-fit
+        // grid-fixed ones to the imported grid. Legacy dp geometry is clamped to the page.
+        val cfg = imported.config
+        for (w in imported.widgets()) w.fitToPage(pw, ph, cfg.columns, cfg.rows)
 
         customIconDir.listFiles()?.forEach { it.delete() }
         customIconCache.clear()
